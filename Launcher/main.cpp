@@ -21,30 +21,25 @@ int wmain(int argc, wchar_t* argv[]) {
         }
     }
 
-    // Pass mode toggle to the injected DLL via environment variable
     SetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", useVkd3d ? L"1" : L"0");
     std::wcout << L"[*] Mode: " << (useVkd3d ? L"Spoof FL 12_0 + vkd3d-proton Vulkan\n" : L"Native DX12 FL 12_0 Spoof\n");
 
-    // Get full path to SpooferDLL.dll in the same folder as Launcher.exe
     wchar_t launcherDir[MAX_PATH];
     GetModuleFileNameW(NULL, launcherDir, MAX_PATH);
     std::wstring dllPath(launcherDir);
     dllPath = dllPath.substr(0, dllPath.find_last_of(L"\\/")) + L"\\SpooferDLL.dll";
 
-    // Get game working directory
     std::wstring gameDir = gamePath.substr(0, gamePath.find_last_of(L"\\/"));
 
     STARTUPINFOW si = { sizeof(si) };
     PROCESS_INFORMATION pi = { 0 };
 
-    // 1. Start game in CREATE_SUSPENDED state before any GPU checks run
     if (!CreateProcessW(gamePath.c_str(), NULL, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, gameDir.c_str(), &si, &pi)) {
         std::wcerr << L"[!] Failed to launch game. Error: " << GetLastError() << L"\n";
         system("pause");
         return 1;
     }
 
-    // 2. Allocate memory in frozen process and inject SpooferDLL.dll
     size_t pathSize = (dllPath.size() + 1) * sizeof(wchar_t);
     LPVOID remoteMem = VirtualAllocEx(pi.hProcess, NULL, pathSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     WriteProcessMemory(pi.hProcess, remoteMem, dllPath.c_str(), pathSize, NULL);
@@ -60,7 +55,6 @@ int wmain(int argc, wchar_t* argv[]) {
 
     VirtualFreeEx(pi.hProcess, remoteMem, 0, MEM_RELEASE);
 
-    // 3. Resume game with hooks active
     std::wcout << L"[+] SpooferDLL injected! Resuming game...\n";
     ResumeThread(pi.hThread);
 
