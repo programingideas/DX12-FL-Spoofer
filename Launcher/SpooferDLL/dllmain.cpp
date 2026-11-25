@@ -60,8 +60,9 @@ HRESULT WINAPI hooked_D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL Mi
 
     if (SUCCEEDED(hr) && ppDevice && *ppDevice && !orig_CheckFeatureSupport) {
         void** vtable = *reinterpret_cast<void***>(*ppDevice);
-        if (MH_CreateHook(vtable[13], &hooked_CheckFeatureSupport, reinterpret_cast<void**>(&orig_CheckFeatureSupport)) == MH_OK) {
-            MH_EnableHook(vtable[13]);
+        void* pCheckFeature = *(vtable + 13);
+        if (MH_CreateHook(pCheckFeature, &hooked_CheckFeatureSupport, reinterpret_cast<void**>(&orig_CheckFeatureSupport)) == MH_OK) {
+            MH_EnableHook(pCheckFeature);
             Log("[HOOK] Installed ID3D12Device::CheckFeatureSupport VTable hook");
         }
     }
@@ -88,8 +89,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         std::wstring pathStr(dllPath);
         g_SpooferDir = pathStr.substr(0, pathStr.find_last_of(L"\\/"));
 
-        wchar_t envBuf[8] = { 0 };
-        if (GetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", envBuf, 8) && wcscmp(envBuf, L"1") == 0) {
+        wchar_t envBuf[16] = { 0 };
+        if (GetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", envBuf, 16) && wcscmp(envBuf, L"1") == 0) {
             g_UseVkd3d = true;
             std::wstring vkd3dPath = g_SpooferDir + L"\\vkd3d\\d3d12.dll";
             g_Vkd3dModule = LoadLibraryW(vkd3dPath.c_str());
