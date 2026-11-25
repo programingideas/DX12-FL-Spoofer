@@ -26,7 +26,6 @@ void Log(const std::string& msg) {
     }
 }
 
-// VTable Hook #13: Spoof CheckFeatureSupport so games think FL 12_0 is natively supported
 HRESULT WINAPI hooked_CheckFeatureSupport(ID3D12Device* pThis, D3D12_FEATURE Feature, void* pFeatureSupportData, UINT FeatureSupportDataSize) {
     HRESULT hr = orig_CheckFeatureSupport(pThis, Feature, pFeatureSupportData, FeatureSupportDataSize);
     if (SUCCEEDED(hr) && Feature == D3D12_FEATURE_FEATURE_LEVELS && pFeatureSupportData) {
@@ -39,7 +38,6 @@ HRESULT WINAPI hooked_CheckFeatureSupport(ID3D12Device* pThis, D3D12_FEATURE Fea
     return hr;
 }
 
-// Intercept D3D12CreateDevice: Downgrade FL 12_0 request -> 11_0 or route to vkd3d-proton
 HRESULT WINAPI hooked_D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel, REFIID riid, void** ppDevice) {
     D3D_FEATURE_LEVEL actualLevel = MinimumFeatureLevel;
     if (MinimumFeatureLevel > D3D_FEATURE_LEVEL_11_0) {
@@ -49,19 +47,17 @@ HRESULT WINAPI hooked_D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL Mi
 
     PFN_D3D12CreateDevice targetCreateDevice = orig_D3D12CreateDevice;
 
-    // If vkd3d mode is active, forward device creation to bundled vkd3d-proton d3d12.dll
     if (g_UseVkd3d && g_Vkd3dModule) {
         auto vkd3dCreate = (PFN_D3D12CreateDevice)GetProcAddress(g_Vkd3dModule, "D3D12CreateDevice");
         if (vkd3dCreate) {
             targetCreateDevice = vkd3dCreate;
-            actualLevel = MinimumFeatureLevel; // vkd3d-proton handles 12_0 natively over Vulkan 1.3
+            actualLevel = MinimumFeatureLevel;
             Log("[HOOK] Routing D3D12CreateDevice -> vkd3d-proton (Vulkan 1.3)");
         }
     }
 
     HRESULT hr = targetCreateDevice(pAdapter, actualLevel, riid, ppDevice);
 
-    // Hook ID3D12Device::CheckFeatureSupport on the created device
     if (SUCCEEDED(hr) && ppDevice && *ppDevice && !orig_CheckFeatureSupport) {
         void** vtable = *reinterpret_cast<void***>(*ppDevice);
         if (MH_CreateHook(vtable[13], &hooked_CheckFeatureSupport, reinterpret_cast<void**>(&orig_CheckFeatureSupport)) == MH_OK) {
@@ -72,7 +68,6 @@ HRESULT WINAPI hooked_D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL Mi
     return hr;
 }
 
-// Catch games trying to bypass folder proxies by calling System32 directly
 HMODULE WINAPI hooked_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
     if (g_UseVkd3d && g_Vkd3dModule && lpLibFileName) {
         std::wstring lib(lpLibFileName);
