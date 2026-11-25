@@ -13,9 +13,11 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Clone MinHook Dependency
-        run: |
-          git clone https://github.com deps/minhook
+      - name: Fetch MinHook Dependency
+        uses: actions/checkout@v4
+        with:
+          repository: TsudaKageyu/minhook
+          path: deps/minhook
 
       - name: Setup MSVC Compiler
         uses: ilammy/msvc-dev-cmd@v1
