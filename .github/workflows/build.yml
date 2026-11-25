@@ -23,10 +23,11 @@ jobs:
           arch: x64
 
       - name: Compile Launcher.exe and SpooferDLL.dll
+        shell: cmd
         run: |
           mkdir build\vkd3d
           cl /O2 /EHsc /std:c++17 Launcher\main.cpp /Fe:build\Launcher.exe
-          cl /O2 /EHsc /std:c++17 /LD /I deps\minhook\include SpooferDLL\dllmain.cpp deps\minhook\src\*.c deps\minhook\src\hde\*.c /Fe:build\SpooferDLL.dll user32.lib
+          cl /O2 /EHsc /std:c++17 /LD /I deps\minhook\include Launcher\SpooferDLL\dllmain.cpp deps\minhook\src\*.c deps\minhook\src\hde\*.c /Fe:build\SpooferDLL.dll user32.lib
 
       - name: Upload Compiled Release Zip
         uses: actions/upload-artifact@v4
