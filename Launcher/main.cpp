@@ -2,7 +2,7 @@
 #include <iostream>
 #include <string>
 
-int wmain(int argc, wchar_t* argv[]) {
+int wmain(int argc, wchar_t** argv) {
     std::wcout << L"=== DX12-FL-Spoofer v0.1 (GTX 750 Ti / Legacy GPU Enabler) ===\n";
 
     if (argc < 2) {
@@ -12,11 +12,11 @@ int wmain(int argc, wchar_t* argv[]) {
         return 1;
     }
 
-    std::wstring gamePath = argv[1];
+    std::wstring gamePath = *(argv + 1);
     bool useVkd3d = false;
 
     for (int i = 2; i < argc; ++i) {
-        if (std::wstring(argv[i]) == L"--vkd3d") {
+        if (std::wstring(*(argv + i)) == L"--vkd3d") {
             useVkd3d = true;
         }
     }
