@@ -1,0 +1,35 @@
+name: Build DX12-FL-Spoofer
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v4
+
+      - name: Clone MinHook Dependency
+        run: |
+          git clone https://github.com deps/minhook
+
+      - name: Setup MSVC Compiler
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Compile Launcher.exe and SpooferDLL.dll
+        run: |
+          mkdir build\vkd3d
+          cl /O2 /EHsc /std:c++17 Launcher\main.cpp /Fe:build\Launcher.exe
+          cl /O2 /EHsc /std:c++17 /LD /I deps\minhook\include SpooferDLL\dllmain.cpp deps\minhook\src\*.c deps\minhook\src\hde\*.c /Fe:build\SpooferDLL.dll user32.lib
+
+      - name: Upload Compiled Release Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: DX12-FL-Spoofer-v0.1-Win64
+          path: build/
