@@ -48,8 +48,9 @@ HRESULT WINAPI hooked_CheckFeatureSupport(ID3D12Device* pThis, D3D12_FEATURE Fea
     }
     else if (Feature == D3D12_FEATURE_SHADER_MODEL) {
         auto* pSM = static_cast<D3D12_FEATURE_DATA_SHADER_MODEL*>(pFeatureSupportData);
-        if (FAILED(hr) || pSM->HighestShaderModel < D3D_SHADER_MODEL_6_6) {
-            pSM->HighestShaderModel = D3D_SHADER_MODEL_6_6;
+        D3D_SHADER_MODEL targetSM = static_cast<D3D_SHADER_MODEL>(0x66);
+        if (FAILED(hr) || pSM->HighestShaderModel < targetSM) {
+            pSM->HighestShaderModel = targetSM;
             hr = S_OK;
             Log("[HOOK] CheckFeatureSupport: Spoofed HighestShaderModel -> SM 6.6");
         }
