@@ -115,16 +115,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
     if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
         DisableThreadLibraryCalls(hModule);
 
-        wchar_t dllPath[MAX_PATH];
-        GetModuleFileNameW(hModule, dllPath, MAX_PATH);
-        std::wstring pathStr(dllPath);
-        g_SpooferDir = pathStr.substr(0, pathStr.find_last_of(L"\\/"));
+        std::wstring dllPath(MAX_PATH, L'\0');
+        DWORD len = GetModuleFileNameW(hModule, &dllPath, MAX_PATH);
+        dllPath.resize(len);
+        g_SpooferDir = dllPath.substr(0, dllPath.find_last_of(L"\\/"));
 
-        wchar_t envBuf = { 0 };
-        if (GetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", envBuf, 16) && wcscmp(envBuf, L"1") == 0) {
-            g_UseVkd3d = true;
-            std::wstring vkd3dPath = g_SpooferDir + L"\\vkd3d\\d3d12.dll";
-            g_Vkd3dModule = LoadLibraryW(vkd3dPath.c_str());
+        std::wstring envBuf(16, L'\0');
+        DWORD envLen = GetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", &envBuf, 16);
+        if (envLen > 0) {
+            envBuf.resize(envLen);
+            if (envBuf == L"1") {
+                g_UseVkd3d = true;
+                std::wstring vkd3dPath = g_SpooferDir + L"\\vkd3d\\d3d12.dll";
+                g_Vkd3dModule = LoadLibraryW(vkd3dPath.c_str());
+            }
         }
 
         Log("=== SpooferDLL v0.2 Attached ===");
