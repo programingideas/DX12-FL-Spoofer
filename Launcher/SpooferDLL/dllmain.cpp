@@ -116,12 +116,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         DisableThreadLibraryCalls(hModule);
 
         std::wstring dllPath(MAX_PATH, L'\0');
-        DWORD len = GetModuleFileNameW(hModule, &dllPath, MAX_PATH);
+        DWORD len = GetModuleFileNameW(hModule, dllPath.data(), MAX_PATH);
         dllPath.resize(len);
         g_SpooferDir = dllPath.substr(0, dllPath.find_last_of(L"\\/"));
 
         std::wstring envBuf(16, L'\0');
-        DWORD envLen = GetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", &envBuf, 16);
+        DWORD envLen = GetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", envBuf.data(), 16);
         if (envLen > 0) {
             envBuf.resize(envLen);
             if (envBuf == L"1") {
