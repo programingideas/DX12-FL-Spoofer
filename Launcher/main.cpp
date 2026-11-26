@@ -1,64 +1,145 @@
 #include <windows.h>
-#include <iostream>
+#include <d3d12.h>
+#include <dxgi1_6.h>
+#include <fstream>
 #include <string>
+#include "MinHook.h"
 
-int wmain(int argc, wchar_t** argv) {
-    std::wcout << L"=== DX12-FL-Spoofer v0.1 (GTX 750 Ti / Legacy GPU Enabler) ===\n";
+#pragma comment(lib, "d3d12.lib")
 
-    if (argc < 2) {
-        std::wcout << L"Usage: Launcher.exe <path_to_game.exe> [--vkd3d]\n";
-        std::wcout << L"Tip: Drag and drop your game .exe onto Launcher.exe!\n";
-        system("pause");
-        return 1;
+typedef HRESULT(WINAPI* PFN_D3D12CreateDevice)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
+typedef HRESULT(WINAPI* PFN_CheckFeatureSupport)(ID3D12Device*, D3D12_FEATURE, void*, UINT);
+typedef HMODULE(WINAPI* PFN_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
+typedef HMODULE(WINAPI* PFN_LoadLibraryW)(LPCWSTR);
+
+PFN_D3D12CreateDevice orig_D3D12CreateDevice = nullptr;
+PFN_CheckFeatureSupport orig_CheckFeatureSupport = nullptr;
+PFN_LoadLibraryExW orig_LoadLibraryExW = nullptr;
+PFN_LoadLibraryW orig_LoadLibraryW = nullptr;
+
+bool g_UseVkd3d = false;
+HMODULE g_Vkd3dModule = nullptr;
+std::wstring g_SpooferDir;
+
+void Log(const std::string& msg) {
+    std::ofstream logFile(g_SpooferDir + L"\\spoofer.log", std::ios::app);
+    if (logFile.is_open()) {
+        logFile << msg << "\n";
+    }
+}
+
+HRESULT WINAPI hooked_CheckFeatureSupport(ID3D12Device* pThis, D3D12_FEATURE Feature, void* pFeatureSupportData, UINT FeatureSupportDataSize) {
+    HRESULT hr = orig_CheckFeatureSupport(pThis, Feature, pFeatureSupportData, FeatureSupportDataSize);
+    if (!pFeatureSupportData) return hr;
+
+    if (SUCCEEDED(hr) && Feature == D3D12_FEATURE_FEATURE_LEVELS) {
+        auto* pLevels = static_cast<D3D12_FEATURE_DATA_FEATURE_LEVELS*>(pFeatureSupportData);
+        if (pLevels->MaxSupportedFeatureLevel < D3D_FEATURE_LEVEL_12_0) {
+            pLevels->MaxSupportedFeatureLevel = D3D_FEATURE_LEVEL_12_0;
+            Log("[HOOK] CheckFeatureSupport: Spoofed MaxSupportedFeatureLevel -> 12_0");
+        }
+    }
+    else if (SUCCEEDED(hr) && Feature == D3D12_FEATURE_D3D12_OPTIONS) {
+        auto* pOpts = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS*>(pFeatureSupportData);
+        if (pOpts->ResourceBindingTier < D3D12_RESOURCE_BINDING_TIER_3) {
+            pOpts->ResourceBindingTier = D3D12_RESOURCE_BINDING_TIER_3;
+            Log("[HOOK] CheckFeatureSupport: Spoofed ResourceBindingTier -> Tier 3");
+        }
+    }
+    else if (Feature == D3D12_FEATURE_SHADER_MODEL) {
+        auto* pSM = static_cast<D3D12_FEATURE_DATA_SHADER_MODEL*>(pFeatureSupportData);
+        if (FAILED(hr) || pSM->HighestShaderModel < D3D_SHADER_MODEL_6_6) {
+            pSM->HighestShaderModel = D3D_SHADER_MODEL_6_6;
+            hr = S_OK;
+            Log("[HOOK] CheckFeatureSupport: Spoofed HighestShaderModel -> SM 6.6");
+        }
+    }
+    return hr;
+}
+
+HRESULT WINAPI hooked_D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel, REFIID riid, void** ppDevice) {
+    D3D_FEATURE_LEVEL actualLevel = MinimumFeatureLevel;
+    if (MinimumFeatureLevel > D3D_FEATURE_LEVEL_11_0) {
+        actualLevel = D3D_FEATURE_LEVEL_11_0;
+        Log("[HOOK] D3D12CreateDevice: Intercepted FL >= 12_0 request -> Spoofing FL 11_0");
     }
 
-    std::wstring gamePath = *(argv + 1);
-    bool useVkd3d = false;
+    PFN_D3D12CreateDevice targetCreateDevice = orig_D3D12CreateDevice;
 
-    for (int i = 2; i < argc; ++i) {
-        if (std::wstring(*(argv + i)) == L"--vkd3d") {
-            useVkd3d = true;
+    if (g_UseVkd3d && g_Vkd3dModule) {
+        auto vkd3dCreate = (PFN_D3D12CreateDevice)GetProcAddress(g_Vkd3dModule, "D3D12CreateDevice");
+        if (vkd3dCreate) {
+            targetCreateDevice = vkd3dCreate;
+            actualLevel = MinimumFeatureLevel;
+            Log("[HOOK] Routing D3D12CreateDevice -> vkd3d-proton (Vulkan 1.3)");
         }
     }
 
-    SetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", useVkd3d ? L"1" : L"0");
-    std::wcout << L"[*] Mode: " << (useVkd3d ? L"Spoof FL 12_0 + vkd3d-proton Vulkan\n" : L"Native DX12 FL 12_0 Spoof\n");
+    HRESULT hr = targetCreateDevice(pAdapter, actualLevel, riid, ppDevice);
 
-    wchar_t launcherDir[MAX_PATH];
-    GetModuleFileNameW(NULL, launcherDir, MAX_PATH);
-    std::wstring dllPath(launcherDir);
-    dllPath = dllPath.substr(0, dllPath.find_last_of(L"\\/")) + L"\\SpooferDLL.dll";
-
-    std::wstring gameDir = gamePath.substr(0, gamePath.find_last_of(L"\\/"));
-
-    STARTUPINFOW si = { sizeof(si) };
-    PROCESS_INFORMATION pi = { 0 };
-
-    if (!CreateProcessW(gamePath.c_str(), NULL, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, gameDir.c_str(), &si, &pi)) {
-        std::wcerr << L"[!] Failed to launch game. Error: " << GetLastError() << L"\n";
-        system("pause");
-        return 1;
+    if (SUCCEEDED(hr) && ppDevice && *ppDevice && !orig_CheckFeatureSupport) {
+        void** vtable = *reinterpret_cast<void***>(*ppDevice);
+        void* pCheckFeature = *(vtable + 13);
+        if (MH_CreateHook(pCheckFeature, &hooked_CheckFeatureSupport, reinterpret_cast<void**>(&orig_CheckFeatureSupport)) == MH_OK) {
+            MH_EnableHook(pCheckFeature);
+            Log("[HOOK] Installed ID3D12Device::CheckFeatureSupport VTable hook");
+        }
     }
+    return hr;
+}
 
-    size_t pathSize = (dllPath.size() + 1) * sizeof(wchar_t);
-    LPVOID remoteMem = VirtualAllocEx(pi.hProcess, NULL, pathSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    WriteProcessMemory(pi.hProcess, remoteMem, dllPath.c_str(), pathSize, NULL);
+bool IsD3D12Dll(LPCWSTR lpLibFileName) {
+    if (!lpLibFileName) return false;
+    std::wstring lib(lpLibFileName);
+    return (lib.find(L"d3d12.dll") != std::wstring::npos || lib.find(L"D3D12.dll") != std::wstring::npos);
+}
 
-    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
-    LPTHREAD_START_ROUTINE loadLibAddr = (LPTHREAD_START_ROUTINE)GetProcAddress(hKernel32, "LoadLibraryW");
-
-    HANDLE hThread = CreateRemoteThread(pi.hProcess, NULL, 0, loadLibAddr, remoteMem, 0, NULL);
-    if (hThread) {
-        WaitForSingleObject(hThread, INFINITE);
-        CloseHandle(hThread);
+HMODULE WINAPI hooked_LoadLibraryExW(LPCWSTR lpLibFileName, HANDLE hFile, DWORD dwFlags) {
+    if (g_UseVkd3d && g_Vkd3dModule && IsD3D12Dll(lpLibFileName)) {
+        Log("[HOOK] LoadLibraryExW: Intercepted d3d12.dll -> Returning vkd3d-proton handle");
+        return g_Vkd3dModule;
     }
+    return orig_LoadLibraryExW(lpLibFileName, hFile, dwFlags);
+}
 
-    VirtualFreeEx(pi.hProcess, remoteMem, 0, MEM_RELEASE);
+HMODULE WINAPI hooked_LoadLibraryW(LPCWSTR lpLibFileName) {
+    if (g_UseVkd3d && g_Vkd3dModule && IsD3D12Dll(lpLibFileName)) {
+        Log("[HOOK] LoadLibraryW: Intercepted d3d12.dll -> Returning vkd3d-proton handle");
+        return g_Vkd3dModule;
+    }
+    return orig_LoadLibraryW(lpLibFileName);
+}
 
-    std::wcout << L"[+] SpooferDLL injected! Resuming game...\n";
-    ResumeThread(pi.hThread);
+BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
+    if (ul_reason_for_call == DLL_PROCESS_ATTACH) {
+        DisableThreadLibraryCalls(hModule);
 
-    CloseHandle(pi.hThread);
-    CloseHandle(pi.hProcess);
-    return 0;
+        wchar_t dllPath[MAX_PATH];
+        GetModuleFileNameW(hModule, dllPath, MAX_PATH);
+        std::wstring pathStr(dllPath);
+        g_SpooferDir = pathStr.substr(0, pathStr.find_last_of(L"\\/"));
+
+        wchar_t envBuf = { 0 };
+        if (GetEnvironmentVariableW(L"SPOOFER_USE_VKD3D", envBuf, 16) && wcscmp(envBuf, L"1") == 0) {
+            g_UseVkd3d = true;
+            std::wstring vkd3dPath = g_SpooferDir + L"\\vkd3d\\d3d12.dll";
+            g_Vkd3dModule = LoadLibraryW(vkd3dPath.c_str());
+        }
+
+        Log("=== SpooferDLL v0.2 Attached ===");
+
+        if (MH_Initialize() == MH_OK) {
+            HMODULE hD3D12 = LoadLibraryW(L"d3d12.dll");
+            if (hD3D12) {
+                void* pCreateDevice = GetProcAddress(hD3D12, "D3D12CreateDevice");
+                MH_CreateHook(pCreateDevice, &hooked_D3D12CreateDevice, reinterpret_cast<void**>(&orig_D3D12CreateDevice));
+            }
+            MH_CreateHookApi(L"kernelbase.dll", "LoadLibraryExW", &hooked_LoadLibraryExW, reinterpret_cast<void**>(&orig_LoadLibraryExW));
+            MH_CreateHookApi(L"kernelbase.dll", "LoadLibraryW", &hooked_LoadLibraryW, reinterpret_cast<void**>(&orig_LoadLibraryW));
+            MH_EnableHook(MH_ALL_HOOKS);
+        }
+    } else if (ul_reason_for_call == DLL_PROCESS_DETACH) {
+        MH_Uninitialize();
+    }
+    return TRUE;
 }
