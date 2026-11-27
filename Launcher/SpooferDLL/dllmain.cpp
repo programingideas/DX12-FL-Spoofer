@@ -34,18 +34,14 @@ void Log(const std::string& msg) {
 
 // Probe the highest Feature Level the physical GPU actually supports (12_1 -> 12_0 -> 11_0)
 D3D_FEATURE_LEVEL DetectNativeMaxFeatureLevel(IUnknown* pAdapter) {
-    D3D_FEATURE_LEVEL levels = {
-        D3D_FEATURE_LEVEL_12_1,
-        D3D_FEATURE_LEVEL_12_0,
-        D3D_FEATURE_LEVEL_11_1,
-        D3D_FEATURE_LEVEL_11_0
-    };
-    D3D_FEATURE_LEVEL* ptr = &levels;
-    for (int i = 0; i < 4; ++i) {
-        D3D_FEATURE_LEVEL lvl = *(ptr + i);
-        if (SUCCEEDED(orig_D3D12CreateDevice(pAdapter, lvl, __uuidof(ID3D12Device), nullptr))) {
-            return lvl;
-        }
+    if (SUCCEEDED(orig_D3D12CreateDevice(pAdapter, D3D_FEATURE_LEVEL_12_1, __uuidof(ID3D12Device), nullptr))) {
+        return D3D_FEATURE_LEVEL_12_1;
+    }
+    if (SUCCEEDED(orig_D3D12CreateDevice(pAdapter, D3D_FEATURE_LEVEL_12_0, __uuidof(ID3D12Device), nullptr))) {
+        return D3D_FEATURE_LEVEL_12_0;
+    }
+    if (SUCCEEDED(orig_D3D12CreateDevice(pAdapter, D3D_FEATURE_LEVEL_11_1, __uuidof(ID3D12Device), nullptr))) {
+        return D3D_FEATURE_LEVEL_11_1;
     }
     return D3D_FEATURE_LEVEL_11_0;
 }
