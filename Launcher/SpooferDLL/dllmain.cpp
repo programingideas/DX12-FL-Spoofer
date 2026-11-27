@@ -7,6 +7,10 @@
 
 #pragma comment(lib, "d3d12.lib")
 
+#ifndef D3D_FEATURE_LEVEL_12_2
+#define D3D_FEATURE_LEVEL_12_2 ((D3D_FEATURE_LEVEL)0xc200)
+#endif
+
 typedef HRESULT(WINAPI* PFN_D3D12CreateDevice)(IUnknown*, D3D_FEATURE_LEVEL, REFIID, void**);
 typedef HRESULT(WINAPI* PFN_CheckFeatureSupport)(ID3D12Device*, D3D12_FEATURE, void*, UINT);
 typedef HMODULE(WINAPI* PFN_LoadLibraryExW)(LPCWSTR, HANDLE, DWORD);
@@ -28,17 +32,37 @@ void Log(const std::string& msg) {
     }
 }
 
+// Probe the highest Feature Level the physical GPU actually supports (12_1 -> 12_0 -> 11_0)
+D3D_FEATURE_LEVEL DetectNativeMaxFeatureLevel(IUnknown* pAdapter) {
+    D3D_FEATURE_LEVEL levels = {
+        D3D_FEATURE_LEVEL_12_1,
+        D3D_FEATURE_LEVEL_12_0,
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0
+    };
+    D3D_FEATURE_LEVEL* ptr = &levels;
+    for (int i = 0; i < 4; ++i) {
+        D3D_FEATURE_LEVEL lvl = *(ptr + i);
+        if (SUCCEEDED(orig_D3D12CreateDevice(pAdapter, lvl, __uuidof(ID3D12Device), nullptr))) {
+            return lvl;
+        }
+    }
+    return D3D_FEATURE_LEVEL_11_0;
+}
+
 HRESULT WINAPI hooked_CheckFeatureSupport(ID3D12Device* pThis, D3D12_FEATURE Feature, void* pFeatureSupportData, UINT FeatureSupportDataSize) {
     HRESULT hr = orig_CheckFeatureSupport(pThis, Feature, pFeatureSupportData, FeatureSupportDataSize);
     if (!pFeatureSupportData) return hr;
 
+    // 1. Spoof Feature Levels up to 12_2 (DX12 Ultimate) for Maxwell (11_0), Polaris (12_0), and Pascal/Turing (12_1)
     if (SUCCEEDED(hr) && Feature == D3D12_FEATURE_FEATURE_LEVELS) {
         auto* pLevels = static_cast<D3D12_FEATURE_DATA_FEATURE_LEVELS*>(pFeatureSupportData);
-        if (pLevels->MaxSupportedFeatureLevel < D3D_FEATURE_LEVEL_12_0) {
-            pLevels->MaxSupportedFeatureLevel = D3D_FEATURE_LEVEL_12_0;
-            Log("[HOOK] CheckFeatureSupport: Spoofed MaxSupportedFeatureLevel -> 12_0");
+        if (pLevels->MaxSupportedFeatureLevel < D3D_FEATURE_LEVEL_12_2) {
+            pLevels->MaxSupportedFeatureLevel = D3D_FEATURE_LEVEL_12_2;
+            Log("[HOOK] CheckFeatureSupport: Spoofed MaxSupportedFeatureLevel -> 12_2 (DX12 Ultimate)");
         }
     }
+    // 2. Spoof Resource Binding Tier 3 (Bindless Textures)
     else if (SUCCEEDED(hr) && Feature == D3D12_FEATURE_D3D12_OPTIONS) {
         auto* pOpts = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS*>(pFeatureSupportData);
         if (pOpts->ResourceBindingTier < D3D12_RESOURCE_BINDING_TIER_3) {
@@ -46,6 +70,25 @@ HRESULT WINAPI hooked_CheckFeatureSupport(ID3D12Device* pThis, D3D12_FEATURE Fea
             Log("[HOOK] CheckFeatureSupport: Spoofed ResourceBindingTier -> Tier 3");
         }
     }
+    // 3. Spoof Raytracing Tier 1.1 (Bypasses hardcoded RT startup gates like DOOM Dark Ages / Gears E-Day)
+    else if (Feature == D3D12_FEATURE_D3D12_OPTIONS5) {
+        auto* pOpts5 = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS5*>(pFeatureSupportData);
+        if (FAILED(hr) || pOpts5->RaytracingTier < D3D12_RAYTRACING_TIER_1_1) {
+            pOpts5->RaytracingTier = D3D12_RAYTRACING_TIER_1_1;
+            hr = S_OK;
+            Log("[HOOK] CheckFeatureSupport: Spoofed RaytracingTier -> Tier 1.1");
+        }
+    }
+    // 4. Spoof Mesh Shader Tier 1 (Bypasses DX12 Ultimate Mesh Shader gates)
+    else if (Feature == D3D12_FEATURE_D3D12_OPTIONS7) {
+        auto* pOpts7 = static_cast<D3D12_FEATURE_DATA_D3D12_OPTIONS7*>(pFeatureSupportData);
+        if (FAILED(hr) || pOpts7->MeshShaderTier < D3D12_MESH_SHADER_TIER_1) {
+            pOpts7->MeshShaderTier = D3D12_MESH_SHADER_TIER_1;
+            hr = S_OK;
+            Log("[HOOK] CheckFeatureSupport: Spoofed MeshShaderTier -> Tier 1");
+        }
+    }
+    // 5. Spoof Shader Model 6.6
     else if (Feature == D3D12_FEATURE_SHADER_MODEL) {
         auto* pSM = static_cast<D3D12_FEATURE_DATA_SHADER_MODEL*>(pFeatureSupportData);
         D3D_SHADER_MODEL targetSM = static_cast<D3D_SHADER_MODEL>(0x66);
@@ -60,9 +103,19 @@ HRESULT WINAPI hooked_CheckFeatureSupport(ID3D12Device* pThis, D3D12_FEATURE Fea
 
 HRESULT WINAPI hooked_D3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL MinimumFeatureLevel, REFIID riid, void** ppDevice) {
     D3D_FEATURE_LEVEL actualLevel = MinimumFeatureLevel;
-    if (MinimumFeatureLevel > D3D_FEATURE_LEVEL_11_0) {
-        actualLevel = D3D_FEATURE_LEVEL_11_0;
-        Log("[HOOK] D3D12CreateDevice: Intercepted FL >= 12_0 request -> Spoofing FL 11_0");
+
+    if (!g_UseVkd3d) {
+        D3D_FEATURE_LEVEL nativeMax = DetectNativeMaxFeatureLevel(pAdapter);
+        if (MinimumFeatureLevel > nativeMax) {
+            actualLevel = nativeMax;
+            if (nativeMax == D3D_FEATURE_LEVEL_11_0) {
+                Log("[HOOK] D3D12CreateDevice: GTX 750 Ti / Maxwell 1.0 detected -> Safe fallback to FL 11_0");
+            } else if (nativeMax == D3D_FEATURE_LEVEL_12_0) {
+                Log("[HOOK] D3D12CreateDevice: GCN/Maxwell 2.0 detected -> Safe fallback to FL 12_0");
+            } else {
+                Log("[HOOK] D3D12CreateDevice: Pascal/Turing detected -> Safe fallback to FL 12_1");
+            }
+        }
     }
 
     PFN_D3D12CreateDevice targetCreateDevice = orig_D3D12CreateDevice;
@@ -131,7 +184,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             }
         }
 
-        Log("=== SpooferDLL v0.2 Attached ===");
+        Log("=== SpooferDLL v0.3 (DX12 Ultimate Edition) Attached ===");
 
         if (MH_Initialize() == MH_OK) {
             HMODULE hD3D12 = LoadLibraryW(L"d3d12.dll");
